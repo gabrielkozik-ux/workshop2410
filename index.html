@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="cs" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Workshop Chat</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Day.js pro formátování data a relativního času -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.10/dayjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.10/plugin/relativeTime.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.10/locale/cs.js"></script>
+
+    <!-- Firebase SDK (verze 8) -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+    <style>
+        /* Styl pro plynulé posouvání a skrývání scrollbaru (volitelné) */
+        #messages-container {
+            scroll-behavior: smooth;
+        }
+        #messages-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        #messages-container::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        #messages-container::-webkit-scrollbar-thumb {
+            background: #94a3b8;
+            border-radius: 4px;
+        }
+        #messages-container::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+        /* Zajištění, aby poslední zpráva nebyla překryta formulářem */
+        #messages-container {
+            padding-bottom: 80px; /* Výška formuláře + mezera */
+        }
+    </style>
+</head>
+<body class="bg-slate-100 flex flex-col h-full antialiased font-sans">
+
+    <!-- Hlavička -->
+    <header class="bg-slate-800 text-white shadow-md p-4 flex justify-between items-center z-10">
+        <h1 class="text-xl font-bold">AI Workshop: Soukromý Chat</h1>
+        <div id="user-auth">
+            <!-- Tlačítko Přihlásit se (výchozí stav) -->
+            <button id="login-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-200">
+                Přihlásit se přes Google
+            </button>
+            
+            <!-- Informace o uživateli (skryté) -->
+            <div id="user-info" class="hidden items-center gap-4">
+                <div class="text-right">
+                    <p id="user-name" class="font-semibold text-sm"></p>
+                    <p id="user-email" class="text-xs text-slate-300"></p>
+                </div>
+                <img id="user-photo" class="w-10 h-10 rounded-full" alt="Profilový obrázek">
+                <button id="logout-btn" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-200">
+                    Odhlásit se
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Kontejner pro zprávy -->
+    <main id="messages-container" class="flex-1 overflow-y-auto p-4 md:p-6">
+        <div class="max-w-4xl mx-auto flex flex-col gap-4">
+            <!-- Zde se budou dynamicky vkládat zprávy -->
+        </div>
+    </main>
+
+    <!-- Patička s formulářem pro odeslání -->
+    <footer class="bg-white border-t border-slate-200 p-4 fixed bottom-0 left-0 w-full z-10">
+        <form id="message-form" class="max-w-4xl mx-auto flex items-center gap-4">
+            <input type="text" id="message-input" placeholder="Napište zprávu..." autocomplete="off" class="flex-1 w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition duration-200" disabled>
+            <button type="submit" id="send-btn" class="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-lg transition duration-200" disabled>
+                Odeslat
+            </button>
+        </form>
+    </footer>
+
+    <script>
+        // Nastavení Day.js pro relativní čas v češtině
+        dayjs.extend(dayjs_plugin_relativeTime);
+        dayjs.locale('cs');
+
+        // =====================================================================
+        // FIREBASE KONFIGURACE
+        // =====================================================================
+
+        // Zde vložte konfiguraci z vaší Firebase konzole
+        const firebaseConfig = {
+  apiKey: "AIzaSyBoSwvQmwB6G1TuKR-a9bMsCeOUdkeosTo",
+  authDomain: "workshop-1909.firebaseapp.com",
+  projectId: "workshop-1909",
+  storageBucket: "workshop-1909.firebasestorage.app",
+  messagingSenderId: "446812817355",
+  appId: "1:446812817355:web:55aed7044bc4d0cf65184e",
+  measurementId: "G-0D9CCXRQ3C"
+};
+
+        // Zde vložte své unikátní UID z Firebase Authentication pro admin práva
+        const ADMIN_UID = "zCdHZwDBekZF4sUXNYob1mOZcLl1";
+
+        // Inicializace Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const messagesCollection = db.collection('messages');
+        const googleProvider = new firebase.auth.GoogleAuthProvider();
+
+        // =====================================================================
+        // ODKAZY NA DOM ELEMENTY
+        // =====================================================================
+        const loginBtn = document.getElementById('login-btn');
+        const logoutBtn = document.getElementById('logout-btn');
+        const userInfoDiv = document.getElementById('user-info');
+        const userAuthDiv = document.getElementById('user-auth');
+        
+        const userNameP = document.getElementById('user-name');
+        const userEmailP = document.getElementById('user-email');
+        const userPhotoImg = document.getElementById('user-photo');
+        
+        const messageForm = document.getElementById('message-form');
+        const messageInput = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        const messagesContainer = document.querySelector('#messages-container .max-w-4xl');
+
+        // =====================================================================
+        // AUTENTIZACE
+        // =====================================================================
+
+        // Přihlášení pomocí Google
+        loginBtn.addEventListener('click', () => {
+            auth.signInWithPopup(googleProvider)
+                .catch(error => console.error("Chyba při přihlašování:", error));
+        });
+
+        // Odhlášení
+        logoutBtn.addEventListener('click', () => {
+            auth.signOut()
+                .catch(error => console.error("Chyba při odhlašování:", error));
+        });
+
+        // Sledování stavu přihlášení
+        auth.onAuthStateChanged(user => {
+            if (user) {
+                // Uživatel je přihlášen
+                loginBtn.classList.add('hidden');
+                userInfoDiv.classList.remove('hidden');
+                userInfoDiv.classList.add('flex');
+
+                userNameP.textContent = user.displayName;
+                userEmailP.textContent = user.email;
+                userPhotoImg.src = user.photoURL;
+                
+                messageInput.disabled = false;
+                sendBtn.disabled = false;
+                
+                // Načtení zpráv po úspěšném přihlášení
+                loadMessages(user);
+
+            } else {
+                // Uživatel není přihlášen
+                loginBtn.classList.remove('hidden');
+                userInfoDiv.classList.add('hidden');
+                
+                messageInput.disabled = true;
+                sendBtn.disabled = true;
+
+                messagesContainer.innerHTML = '<p class="text-center text-slate-500">Pro zobrazení chatu se prosím přihlaste.</p>';
+            }
+        });
+
+        // =====================================================================
+        // PRÁCE SE ZPRÁVAMI (FIRESTORE)
+        // =====================================================================
+
+        // Odeslání zprávy
+        messageForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const text = messageInput.value.trim();
+            const user = auth.currentUser;
+
+            if (text && user) {
+                messagesCollection.add({
+                    text: text,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    authorName: user.displayName,
+                    authorId: user.uid,
+                    authorPhotoURL: user.photoURL
+                }).then(() => {
+                    messageInput.value = ''; // Vyčistit pole po odeslání
+                }).catch(error => {
+                    console.error("Chyba při odesílání zprávy: ", error);
+                });
+            }
+        });
+        
+        // Načtení zpráv a naslouchání změn v reálném čase
+        let unsubscribe = null; // Proměnná pro odhlášení listeneru
+        function loadMessages(currentUser) {
+            // Pokud již existuje listener, odhlásíme ho, abychom se vyhnuli duplicitám
+            if (unsubscribe) {
+                unsubscribe();
+            }
+
+            unsubscribe = messagesCollection.orderBy('createdAt', 'asc')
+                .onSnapshot(snapshot => {
+                    messagesContainer.innerHTML = ''; // Vyčistit kontejner před novým vykreslením
+                    if (snapshot.empty) {
+                        messagesContainer.innerHTML = '<p class="text-center text-slate-500">Zatím tu nejsou žádné zprávy. Buďte první!</p>';
+                        return;
+                    }
+                    
+                    snapshot.forEach(doc => {
+                        const messageData = doc.data();
+                        const messageId = doc.id;
+                        renderMessage(messageData, messageId, currentUser);
+                    });
+
+                    // Automatické posunutí na poslední zprávu
+                    messagesContainer.parentElement.scrollTop = messagesContainer.parentElement.scrollHeight;
+                }, error => {
+                    console.error("Chyba při načítání zpráv: ", error);
+                    messagesContainer.innerHTML = '<p class="text-center text-red-500">Nepodařilo se načíst zprávy. Zkuste to prosím znovu.</p>';
+                });
+        }
+        
+        // Vykreslení jedné zprávy
+        function renderMessage(data, id, currentUser) {
+            const isCurrentUser = data.authorId === currentUser.uid;
+            // ZMĚNA: Uživatel může mazat, pokud je autorem NEBO pokud je admin
+            const canDelete = isCurrentUser || currentUser.uid === ADMIN_UID;
+
+            const messageWrapper = document.createElement('div');
+            messageWrapper.classList.add('flex', 'items-start', 'gap-3', 'group');
+            
+            // Zarovnání zprávy
+            if (isCurrentUser) {
+                messageWrapper.classList.add('justify-end');
+            }
+
+            const messageContent = `
+                <div class="flex ${isCurrentUser ? 'flex-row-reverse' : 'flex-row'} items-start gap-3 w-full max-w-lg">
+                    <img src="${data.authorPhotoURL}" class="w-10 h-10 rounded-full" alt="${data.authorName}">
+                    <div class="flex-1">
+                        <div class="p-3 rounded-lg ${isCurrentUser ? 'bg-indigo-500 text-white' : 'bg-white shadow-sm'}">
+                            <div class="flex items-baseline justify-between mb-1">
+                                <p class="font-bold text-sm">${data.authorName}</p>
+                                ${canDelete ? `
+                                    <button data-id="${id}" class="delete-btn opacity-0 group-hover:opacity-100 transition-opacity text-xs ${isCurrentUser ? 'text-indigo-200 hover:text-white' : 'text-slate-400 hover:text-red-500'}">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                          <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/>
+                                          <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/>
+                                        </svg>
+                                    </button>
+                                ` : ''}
+                            </div>
+                            <p class="text-base">${escapeHTML(data.text)}</p>
+                        </div>
+                        <p class="text-xs text-slate-500 mt-1 px-1 ${isCurrentUser ? 'text-right' : 'text-left'}">
+                            ${data.createdAt ? dayjs(data.createdAt.toDate()).fromNow() : 'Právě teď'}
+                        </p>
+                    </div>
+                </div>
+            `;
+            
+            messageWrapper.innerHTML = messageContent;
+            messagesContainer.appendChild(messageWrapper);
+        }
+
+        // Delegování události pro mazání zpráv
+        messagesContainer.addEventListener('click', (e) => {
+            const deleteButton = e.target.closest('.delete-btn');
+            if (deleteButton) {
+                const messageId = deleteButton.dataset.id;
+                if (confirm('Opravdu chcete smazat tuto zprávu?')) {
+                    deleteMessage(messageId);
+                }
+            }
+        });
+        
+        // Funkce pro smazání zprávy
+        function deleteMessage(id) {
+            messagesCollection.doc(id).delete()
+                .catch(error => {
+                    console.error("Chyba při mazání zprávy: ", error);
+                    alert("Nepodařilo se smazat zprávu.");
+                });
+        }
+
+        // Funkce pro ochranu proti XSS
+        function escapeHTML(str) {
+            const p = document.createElement('p');
+            p.textContent = str;
+            return p.innerHTML;
+        }
+
+    </script>
+</body>
+</html>
+
